@@ -11,13 +11,12 @@ export class MyMCP extends McpAgent {
   async init() {
     this.server.tool(
       "search_archive",
-      "Search Candice's entire file archive (2222+ files across all projects) using natural language. Returns relevant passages with source filenames and folder paths.",
+      "Search the entire file archive using natural language. Returns relevant passages with source filenames and folder paths.",
       { query: z.string(), limit: z.number().optional() },
       async ({ query, limit }) => {
         const resultLimit = Math.min(limit || 5, 20);
         const env = this.env as any;
 
-        // Embed the question with Voyage
         const embResponse = await fetch("https://api.voyageai.com/v1/embeddings", {
           method: "POST",
           headers: {
@@ -32,13 +31,12 @@ export class MyMCP extends McpAgent {
         });
 
         if (!embResponse.ok) {
-          return { content: [{ type: "text", text: "Error embedding query: " + embResponse.status }] };
+          return { content: [{ type: "text" as const, text: "Error embedding query: " + embResponse.status }] };
         }
 
         const embData: any = await embResponse.json();
         const vector = embData.data[0].embedding;
 
-        // Search Qdrant
         const searchResponse = await fetch(
           env.QDRANT_URL + "/collections/Voyage%20Archive/points/search",
           {
@@ -56,36 +54,27 @@ export class MyMCP extends McpAgent {
         );
 
         if (!searchResponse.ok) {
-          return { content: [{ type: "text", text: "Error searching Qdrant: " + searchResponse.status }] };
+          return { content: [{ type: "text" as const, text: "Error searching Qdrant: " + searchResponse.status }] };
         }
 
         const searchData: any = await searchResponse.json();
         const results = searchData.result;
 
         if (!results || results.length === 0) {
-          return { content: [{ type: "text", text: "No results found for: " + query }] };
+          return { content: [{ type: "text" as const, text: "No results found for: " + query }] };
         }
 
-        let output = "Found " + results.length + " results for: \"" + query + "\"
-
-";
+        let output = "Found " + results.length + " results for: " + query + "\n\n";
         for (const r of results) {
           const p = r.payload;
-          output += "---
-";
-          output += "File: " + p.filename + " (chunk " + p.chunk_number + "/" + p.total_chunks + ")
-";
-          output += "Folder: " + p.folder_path + "
-";
-          output += "Relevance: " + (r.score * 100).toFixed(1) + "%
-
-";
-          output += p.text + "
-
-";
+          output += "---\n";
+          output += "File: " + p.filename + " (chunk " + p.chunk_number + "/" + p.total_chunks + ")\n";
+          output += "Folder: " + p.folder_path + "\n";
+          output += "Relevance: " + (r.score * 100).toFixed(1) + "%\n\n";
+          output += p.text + "\n\n";
         }
 
-        return { content: [{ type: "text", text: output }] };
+        return { content: [{ type: "text" as const, text: output }] };
       }
     );
   }
