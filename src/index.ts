@@ -9,9 +9,12 @@ export class MyMCP extends McpAgent {
   });
 
   async init() {
-    this.server.tool(
+    this.server.registerTool(
       "search_archive",
-      { query: z.string(), limit: z.number().optional() },
+      {
+        description: "Search the entire file archive using natural language.",
+        inputSchema: { query: z.string(), limit: z.number().optional() },
+      },
       async ({ query, limit }) => {
         const resultLimit = Math.min(limit || 5, 20);
         const env = this.env as any;
