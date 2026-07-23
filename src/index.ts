@@ -132,7 +132,7 @@ export default {
   async fetch(request: Request, env: any, ctx: ExecutionContext) {
     const server = createServer(env);
     const handler = createMcpHandler(server, {
-      route: "/mcp",
+      route: "/sentinelbrain",
       enableJsonResponse: true,
     });
     return handler(request, env, ctx);
