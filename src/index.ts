@@ -10,7 +10,7 @@ function createServer(env: any) {
 
   server.tool(
     "search_archive",
-    "Search Candice's entire indexed archive using natural language and return relevant passages with filenames, folder paths, chunk positions, and relevance scores.",
+    "Search Candice's entire indexed archive using natural language and return relevant passages with source details.",
     {
       query: z.string(),
       limit: z.number().int().min(1).max(20).optional(),
@@ -37,12 +37,10 @@ function createServer(env: any) {
       if (!embeddingResponse.ok) {
         const details = await embeddingResponse.text();
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Voyage embedding request failed (${embeddingResponse.status}): ${details}`,
-            },
-          ],
+          content: [{
+            type: "text" as const,
+            text: `Voyage request failed (${embeddingResponse.status}): ${details}`,
+          }],
           isError: true,
         };
       }
@@ -52,12 +50,7 @@ function createServer(env: any) {
 
       if (!vector) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: "Voyage returned no query embedding.",
-            },
-          ],
+          content: [{ type: "text" as const, text: "Voyage returned no query embedding." }],
           isError: true,
         };
       }
@@ -82,12 +75,10 @@ function createServer(env: any) {
       if (!qdrantResponse.ok) {
         const details = await qdrantResponse.text();
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `Qdrant search failed (${qdrantResponse.status}): ${details}`,
-            },
-          ],
+          content: [{
+            type: "text" as const,
+            text: `Qdrant search failed (${qdrantResponse.status}): ${details}`,
+          }],
           isError: true,
         };
       }
@@ -97,14 +88,12 @@ function createServer(env: any) {
 
       if (results.length === 0) {
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: `No archive passages found for: ${query}`,
-            },
-          ],
+          content: [{ type: "text" as const, text: `No archive passages found for: ${query}` }],
         };
       }
+
+      const lineBreak = String.fromCharCode(10);
+      const divider = lineBreak + lineBreak + "---" + lineBreak + lineBreak;
 
       const output = results
         .map((result: any, index: number) => {
@@ -113,10 +102,9 @@ function createServer(env: any) {
           const folderPath = payload.folder_path ?? "Unknown folder";
           const chunkNumber = payload.chunk_number ?? "?";
           const totalChunks = payload.total_chunks ?? "?";
-          const score =
-            typeof result.score === "number"
-              ? `${(result.score * 100).toFixed(1)}%`
-              : "Unknown";
+          const score = typeof result.score === "number"
+            ? `${(result.score * 100).toFixed(1)}%`
+            : "Unknown";
           const text = payload.text ?? "";
 
           return [
@@ -127,14 +115,9 @@ function createServer(env: any) {
             `Relevance: ${score}`,
             "",
             text,
-          ].join("
-");
+          ].join(lineBreak);
         })
-        .join("
-
----
-
-");
+        .join(divider);
 
       return {
         content: [{ type: "text" as const, text: output }],
