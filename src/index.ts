@@ -182,4 +182,85 @@ function createServer() {
       const totalChunks = infoPoints[0].payload?.total_chunks ?? 0;
 
       let minChunk = 1;
-      let maxChunk
+      let maxChunk = totalChunks;
+
+      if (position === "last") {
+        minChunk = Math.max(1, totalChunks - chunkCount + 1);
+        maxChunk = totalChunks;
+      } else if (position === "first") {
+        minChunk = 1;
+        maxChunk = chunkCount;
+      } else if (position === "range") {
+        minChunk = from_chunk ?? 1;
+        maxChunk = to_chunk ?? (minChunk + chunkCount - 1);
+      }
+
+      const fetchResponse = await fetch(
+        `${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
+        {
+          method: "POST",
+          headers: {
+            "api-key": QDRANT_API_KEY,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            filter: {
+              must: [
+                { key: "filename", match: { value: filename } },
+                { key: "chunk_number", range: { gte: minChunk, lte: maxChunk } },
+              ],
+            },
+            limit: 50,
+            with_payload: true,
+            with_vector: false,
+          }),
+        },
+      );
+
+      if (!fetchResponse.ok) {
+        const details = await fetchResponse.text();
+        return {
+          content: [{ type: "text" as const, text: `Qdrant fetch failed (${fetchResponse.status}): ${details}` }],
+          isError: true,
+        };
+      }
+
+      const fetchData: any = await fetchResponse.json();
+      const points = fetchData.result?.points ?? [];
+
+      if (points.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `No chunks found for ${filename} in range ${minChunk}-${maxChunk}` }],
+        };
+      }
+
+      points.sort((a: any, b: any) => (a.payload?.chunk_number ?? 0) - (b.payload?.chunk_number ?? 0));
+
+      const header = `File: ${filename} (${totalChunks} total chunks)${lineBreak}Showing chunks ${minChunk}-${maxChunk}:${lineBreak}${lineBreak}`;
+
+      const body = points
+        .map((point: any) => {
+          const p = point.payload ?? {};
+          return `[Chunk ${p.chunk_number}/${totalChunks}]${lineBreak}${p.text ?? ""}`;
+        })
+        .join(lineBreak + lineBreak + "---" + lineBreak + lineBreak);
+
+      return {
+        content: [{ type: "text" as const, text: header + body }],
+      };
+    },
+  );
+
+  return server;
+}
+
+export default {
+  async fetch(request: Request, env: any, ctx: ExecutionContext) {
+    const server = createServer();
+    const handler = createMcpHandler(server, {
+      route: "/mcp",
+      enableJsonResponse: true,
+    });
+    return handler(request, env, ctx);
+  },
+};
