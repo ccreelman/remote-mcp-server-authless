@@ -23,47 +23,47 @@ function createServer() {
       const resultLimit = limit ?? 5;
       const embeddingResponse = await fetch("https://api.voyageai.com/v1/embeddings", {
         method: "POST",
-        headers: { Authorization: `Bearer ${VOYAGE_API_KEY}`, "Content-Type": "application/json" },
+        headers: { Authorization: "Bearer " + VOYAGE_API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ input: [query], model: "voyage-3.5-lite", input_type: "query" }),
       });
       if (!embeddingResponse.ok) {
         const details = await embeddingResponse.text();
-        return { content: [{ type: "text" as const, text: `Voyage request failed (${embeddingResponse.status}): ${details}` }], isError: true };
+        return { content: [{ type: "text", text: "Voyage request failed (" + embeddingResponse.status + "): " + details }], isError: true };
       }
-      const embeddingData: any = await embeddingResponse.json();
+      const embeddingData = await embeddingResponse.json();
       const vector = embeddingData.data?.[0]?.embedding;
       if (!vector) {
-        return { content: [{ type: "text" as const, text: "Voyage returned no query embedding." }], isError: true };
+        return { content: [{ type: "text", text: "Voyage returned no query embedding." }], isError: true };
       }
-      const qdrantResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/search`, {
+      const qdrantResponse = await fetch(QDRANT_URL + "/collections/Voyage%20Archive/points/search", {
         method: "POST",
         headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ vector, limit: resultLimit, with_payload: true, with_vector: false }),
       });
       if (!qdrantResponse.ok) {
         const details = await qdrantResponse.text();
-        return { content: [{ type: "text" as const, text: `Qdrant search failed (${qdrantResponse.status}): ${details}` }], isError: true };
+        return { content: [{ type: "text", text: "Qdrant search failed (" + qdrantResponse.status + "): " + details }], isError: true };
       }
-      const qdrantData: any = await qdrantResponse.json();
+      const qdrantData = await qdrantResponse.json();
       const results = qdrantData.result ?? [];
       if (results.length === 0) {
-        return { content: [{ type: "text" as const, text: `No archive passages found for: ${query}` }] };
+        return { content: [{ type: "text", text: "No archive passages found for: " + query }] };
       }
       const lineBreak = String.fromCharCode(10);
       const divider = lineBreak + lineBreak + "---" + lineBreak + lineBreak;
-      const output = results.map((result: any, index: number) => {
+      const output = results.map(function(result, index) {
         const payload = result.payload ?? {};
         return [
-          `RESULT ${index + 1}`,
-          `File: ${payload.filename ?? "Unknown file"}`,
-          `Folder: ${payload.folder_path ?? "Unknown folder"}`,
-          `Chunk: ${payload.chunk_number ?? "?"}/${payload.total_chunks ?? "?"}`,
-          `Relevance: ${typeof result.score === "number" ? `${(result.score * 100).toFixed(1)}%` : "Unknown"}`,
+          "RESULT " + (index + 1),
+          "File: " + (payload.filename ?? "Unknown file"),
+          "Folder: " + (payload.folder_path ?? "Unknown folder"),
+          "Chunk: " + (payload.chunk_number ?? "?") + "/" + (payload.total_chunks ?? "?"),
+          "Relevance: " + (typeof result.score === "number" ? (result.score * 100).toFixed(1) + "%" : "Unknown"),
           "",
           payload.text ?? "",
         ].join(lineBreak);
       }).join(divider);
-      return { content: [{ type: "text" as const, text: output }] };
+      return { content: [{ type: "text", text: output }] };
     },
   );
 
@@ -80,19 +80,19 @@ function createServer() {
     async ({ filename, position, count, from_chunk, to_chunk }) => {
       const chunkCount = count ?? 5;
       const lineBreak = String.fromCharCode(10);
-      const infoResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+      const infoResponse = await fetch(QDRANT_URL + "/collections/Voyage%20Archive/points/scroll", {
         method: "POST",
         headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ filter: { must: [{ key: "filename", match: { value: filename } }] }, limit: 1, with_payload: true, with_vector: false }),
       });
       if (!infoResponse.ok) {
         const details = await infoResponse.text();
-        return { content: [{ type: "text" as const, text: `Qdrant error (${infoResponse.status}): ${details}` }], isError: true };
+        return { content: [{ type: "text", text: "Qdrant error (" + infoResponse.status + "): " + details }], isError: true };
       }
-      const infoData: any = await infoResponse.json();
+      const infoData = await infoResponse.json();
       const infoPoints = infoData.result?.points ?? [];
       if (infoPoints.length === 0) {
-        return { content: [{ type: "text" as const, text: `No file found in archive with name: ${filename}` }] };
+        return { content: [{ type: "text", text: "No file found in archive with name: " + filename }] };
       }
       const totalChunks = infoPoints[0].payload?.total_chunks ?? 0;
       let minChunk = 1;
@@ -100,27 +100,27 @@ function createServer() {
       if (position === "last") { minChunk = Math.max(1, totalChunks - chunkCount + 1); maxChunk = totalChunks; }
       else if (position === "first") { minChunk = 1; maxChunk = chunkCount; }
       else if (position === "range") { minChunk = from_chunk ?? 1; maxChunk = to_chunk ?? (minChunk + chunkCount - 1); }
-      const fetchResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+      const fetchResponse = await fetch(QDRANT_URL + "/collections/Voyage%20Archive/points/scroll", {
         method: "POST",
         headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
         body: JSON.stringify({ filter: { must: [{ key: "filename", match: { value: filename } }, { key: "chunk_number", range: { gte: minChunk, lte: maxChunk } }] }, limit: 50, with_payload: true, with_vector: false }),
       });
       if (!fetchResponse.ok) {
         const details = await fetchResponse.text();
-        return { content: [{ type: "text" as const, text: `Qdrant fetch failed (${fetchResponse.status}): ${details}` }], isError: true };
+        return { content: [{ type: "text", text: "Qdrant fetch failed (" + fetchResponse.status + "): " + details }], isError: true };
       }
-      const fetchData: any = await fetchResponse.json();
+      const fetchData = await fetchResponse.json();
       const points = fetchData.result?.points ?? [];
       if (points.length === 0) {
-        return { content: [{ type: "text" as const, text: `No chunks found for ${filename} in range ${minChunk}-${maxChunk}` }] };
+        return { content: [{ type: "text", text: "No chunks found for " + filename + " in range " + minChunk + "-" + maxChunk }] };
       }
-      points.sort((a: any, b: any) => (a.payload?.chunk_number ?? 0) - (b.payload?.chunk_number ?? 0));
-      const header = `File: ${filename} (${totalChunks} total chunks)${lineBreak}Showing chunks ${minChunk}-${maxChunk}:${lineBreak}${lineBreak}`;
-      const body = points.map((point: any) => {
+      points.sort(function(a, b) { return (a.payload?.chunk_number ?? 0) - (b.payload?.chunk_number ?? 0); });
+      const header = "File: " + filename + " (" + totalChunks + " total chunks)" + lineBreak + "Showing chunks " + minChunk + "-" + maxChunk + ":" + lineBreak + lineBreak;
+      const body = points.map(function(point) {
         const p = point.payload ?? {};
-        return `[Chunk ${p.chunk_number}/${totalChunks}]${lineBreak}${p.text ?? ""}`;
+        return "[Chunk " + p.chunk_number + "/" + totalChunks + "]" + lineBreak + (p.text ?? "");
       }).join(lineBreak + lineBreak + "---" + lineBreak + lineBreak);
-      return { content: [{ type: "text" as const, text: header + body }] };
+      return { content: [{ type: "text", text: header + body }] };
     },
   );
 
@@ -128,17 +128,17 @@ function createServer() {
     "list_archive_files",
     "List all files and folders in the archive for a given project path. Shows folder structure, filenames, and chunk counts to verify what has been properly ingested. Use this to confirm what a project can access before starting work.",
     {
-      folder_path: z.string().describe("Folder path or partial path to search for (e.g. 'Beneath the Same Stars' or '04-Beneath'). Will match any folder_path containing this string."),
+      folder_path: z.string().describe("Folder path or partial path to search for. Will match any folder_path containing this string."),
     },
     async ({ folder_path }) => {
       const lineBreak = String.fromCharCode(10);
-      const allFiles: Map<string, { folder: string; chunks: number }> = new Map();
-      let offset: string | null = null;
+      const allFiles = new Map();
+      let offset = null;
       let pages = 0;
       const maxPages = 50;
 
       while (pages < maxPages) {
-        const scrollBody: any = {
+        const scrollBody = {
           filter: { must: [{ key: "folder_path", match: { text: folder_path } }] },
           limit: 100,
           with_payload: { include: ["filename", "folder_path", "total_chunks"] },
@@ -146,7 +146,7 @@ function createServer() {
         };
         if (offset) { scrollBody.offset = offset; }
 
-        const response = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+        const response = await fetch(QDRANT_URL + "/collections/Voyage%20Archive/points/scroll", {
           method: "POST",
           headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
           body: JSON.stringify(scrollBody),
@@ -154,10 +154,10 @@ function createServer() {
 
         if (!response.ok) {
           const details = await response.text();
-          return { content: [{ type: "text" as const, text: `Qdrant error (${response.status}): ${details}` }], isError: true };
+          return { content: [{ type: "text", text: "Qdrant error (" + response.status + "): " + details }], isError: true };
         }
 
-        const data: any = await response.json();
+        const data = await response.json();
         const points = data.result?.points ?? [];
 
         for (const point of points) {
@@ -176,32 +176,32 @@ function createServer() {
       }
 
       if (allFiles.size === 0) {
-        return { content: [{ type: "text" as const, text: `No files found in archive matching folder path: ${folder_path}` }] };
+        return { content: [{ type: "text", text: "No files found in archive matching folder path: " + folder_path }] };
       }
 
-      const folders: Map<string, Array<{ name: string; chunks: number }>> = new Map();
+      const folders = new Map();
       for (const [key, value] of allFiles) {
         const filename = key.split("|||")[0];
         if (!folders.has(value.folder)) { folders.set(value.folder, []); }
-        folders.get(value.folder)!.push({ name: filename, chunks: value.chunks });
+        folders.get(value.folder).push({ name: filename, chunks: value.chunks });
       }
 
       const sortedFolders = [...folders.keys()].sort();
-      let output = `ARCHIVE FILES matching "${folder_path}"${lineBreak}`;
-      output += `Total unique files: ${allFiles.size}${lineBreak}`;
-      output += `Total folders: ${sortedFolders.length}${lineBreak}${lineBreak}`;
+      let output = "ARCHIVE FILES matching \"" + folder_path + "\"" + lineBreak;
+      output += "Total unique files: " + allFiles.size + lineBreak;
+      output += "Total folders: " + sortedFolders.length + lineBreak + lineBreak;
 
       for (const folder of sortedFolders) {
-        const files = folders.get(folder)!;
-        files.sort((a, b) => a.name.localeCompare(b.name));
-        output += `FOLDER: ${folder}${lineBreak}`;
+        const files = folders.get(folder);
+        files.sort(function(a, b) { return a.name.localeCompare(b.name); });
+        output += "FOLDER: " + folder + lineBreak;
         for (const file of files) {
-          output += `  ${file.name} (${file.chunks} chunks)${lineBreak}`;
+          output += "  " + file.name + " (" + file.chunks + " chunks)" + lineBreak;
         }
         output += lineBreak;
       }
 
-      return { content: [{ type: "text" as const, text: output }] };
+      return { content: [{ type: "text", text: output }] };
     },
   );
 
@@ -209,7 +209,7 @@ function createServer() {
 }
 
 export default {
-  async fetch(request: Request, env: any, ctx: ExecutionContext) {
+  async fetch(request, env, ctx) {
     const server = createServer();
     const handler = createMcpHandler(server, {
       route: "/mcp",
@@ -218,4 +218,3 @@ export default {
     return handler(request, env, ctx);
   },
 };
-
