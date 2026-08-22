@@ -1,7 +1,3 @@
-
-Here's the entire file. Copy this whole block:
-
-```typescript
 import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -222,6 +218,3 @@ export default {
     return handler(request, env, ctx);
   },
 };
-```
-
-Copy that whole block. On GitHub, click `src/index.ts`, click the pencil icon to edit, select all, delete, paste this in, commit.
