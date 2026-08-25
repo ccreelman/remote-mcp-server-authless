@@ -2,6 +2,10 @@ import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
+const VOYAGE_API_KEY = "pa-DU_GwBAxUdpL2Zdcq3IPMSt4I58V92WI67B2rNWoeh9";
+const QDRANT_URL = "https://e2feb2a4-32fa-4be0-a5cb-1e2c3e441c22.us-west-1-0.aws.cloud.qdrant.io";
+const QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZjQ3MzU4YTktOWQzNC00YWNmLTg5MjktMGJiMGU0OGQ2NWNlIn0.4nBsvVkZwMp0mF5eCX7ZcUmP_S6le-omQulR8VcAfL4";
+
 const REDIRECT_URI = "https://remote-mcp-server-authless.candice-9e9.workers.dev/google/callback";
 const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/documents",
@@ -78,7 +82,7 @@ function createServer(env: any) {
         const resultLimit = limit ?? 5;
         const embeddingResponse = await fetch("https://api.voyageai.com/v1/embeddings", {
           method: "POST",
-          headers: { Authorization: `Bearer ${env.VOYAGE_API_KEY}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${VOYAGE_API_KEY}`, "Content-Type": "application/json" },
           body: JSON.stringify({ input: [query], model: "voyage-3.5-lite", input_type: "query" }),
         });
         if (!embeddingResponse.ok) return textResult(`Voyage request failed (${embeddingResponse.status}): ${await embeddingResponse.text()}`, true);
@@ -86,9 +90,9 @@ function createServer(env: any) {
         const vector = embeddingData.data?.[0]?.embedding;
         if (!vector) return textResult("Voyage returned no query embedding.", true);
 
-        const qdrantResponse = await fetch(`${env.QDRANT_URL}/collections/Voyage%20Archive/points/search`, {
+        const qdrantResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/search`, {
           method: "POST",
-          headers: { "api-key": env.QDRANT_API_KEY, "Content-Type": "application/json" },
+          headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
           body: JSON.stringify({ vector, limit: resultLimit, with_payload: true, with_vector: false }),
         });
         if (!qdrantResponse.ok) return textResult(`Qdrant search failed (${qdrantResponse.status}): ${await qdrantResponse.text()}`, true);
@@ -118,9 +122,9 @@ function createServer(env: any) {
     async ({ filename, position, count, from_chunk, to_chunk }) => {
       try {
         const chunkCount = count ?? 5;
-        const infoResponse = await fetch(`${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+        const infoResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
           method: "POST",
-          headers: { "api-key": env.QDRANT_API_KEY, "Content-Type": "application/json" },
+          headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
           body: JSON.stringify({ filter: { must: [{ key: "filename", match: { value: filename } }] }, limit: 1, with_payload: true, with_vector: false }),
         });
         if (!infoResponse.ok) return textResult(`Qdrant error (${infoResponse.status}): ${await infoResponse.text()}`, true);
@@ -136,9 +140,9 @@ function createServer(env: any) {
           minChunk = from_chunk ?? 1;
           maxChunk = Math.min(totalChunks, to_chunk ?? (minChunk + chunkCount - 1));
         }
-        const fetchResponse = await fetch(`${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+        const fetchResponse = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
           method: "POST",
-          headers: { "api-key": env.QDRANT_API_KEY, "Content-Type": "application/json" },
+          headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
           body: JSON.stringify({
             filter: { must: [{ key: "filename", match: { value: filename } }, { key: "chunk_number", range: { gte: minChunk, lte: maxChunk } }] },
             limit: 50,
@@ -173,9 +177,9 @@ function createServer(env: any) {
             with_vector: false,
           };
           if (offset) scrollBody.offset = offset;
-          const response = await fetch(`${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+          const response = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
             method: "POST",
-            headers: { "api-key": env.QDRANT_API_KEY, "Content-Type": "application/json" },
+            headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
             body: JSON.stringify(scrollBody),
           });
           if (!response.ok) return textResult(`Qdrant error (${response.status}): ${await response.text()}`, true);
