@@ -3,8 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 const VOYAGE_API_KEY = "pa-DU_GwBAxUdpL2Zdcq3IPMSt4I58V92WI67B2rNWoeh9";
-const QDRANT_URL = "https://e2feb2a4-32fa-4be0-a5cb-1e2c3e441c22.us-west-1-0.aws.cloud.qdrant.io";
-const QDRANT_API_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZjQ3MzU4YTktOWQzNC00YWNmLTg5MjktMGJiMGU0OGQ2NWNlIn0.4nBsvVkZwMp0mF5eCX7ZcUmP_S6le-omQulR8VcAfL4";
+const QDRANT_URL =
+  "https://e2feb2a4-32fa-4be0-a5cb-1e2c3e441c22.us-west-1-0.aws.cloud.qdrant.io";
+const QDRANT_API_KEY =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZjQ3MzU4YTktOWQzNC00YWNmLTg5MjktMGJiMGU0OGQ2NWNlIn0.4nBsvVkZwMp0mF5eCX7ZcUmP_S6le-omQulR8VcAfL4";
 
 const REDIRECT_URI =
   "https://remote-mcp-server-authless.candice-9e9.workers.dev/google/callback";
@@ -535,7 +537,7 @@ function createServer(env: any) {
 
           offset = data.result?.next_page_offset ?? null;
 
-          if (!offset || points.length === 0) {
+          if (!offset || !points.length) {
             break;
           }
         }
@@ -685,10 +687,21 @@ function createServer(env: any) {
     "create_google_doc",
     "Create a Google Doc inside a Google Drive folder using a folder path or folder ID.",
     {
-      title: z.string().min(1).describe("Document title"),
-      content: z.string().describe("Plain-text document content"),
-      folder_id: z.string().optional().describe("Optional folder ID"),
-      folder_path: z.string().optional().describe("Optional folder path"),
+      title: z
+        .string()
+        .min(1)
+        .describe("Document title"),
+      content: z
+        .string()
+        .describe("Plain-text document content"),
+      folder_id: z
+        .string()
+        .optional()
+        .describe("Optional folder ID"),
+      folder_path: z
+        .string()
+        .optional()
+        .describe("Optional folder path"),
     },
     async ({ title, content, folder_id, folder_path }) => {
       try {
@@ -762,10 +775,15 @@ function createServer(env: any) {
     "edit_google_doc",
     "Edit an existing Google Doc by appending text or replacing an exact passage.",
     {
-      document_id: z.string().min(1).describe("Google Doc ID"),
+      document_id: z
+        .string()
+        .min(1)
+        .describe("Google Doc ID"),
       mode: z.enum(["append", "replace_text"]),
       text: z.string(),
-      find_text: z.string().optional(),
+      find_text: z
+        .string()
+        .optional(),
     },
     async ({ document_id, mode, text, find_text }) => {
       try {
