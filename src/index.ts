@@ -237,6 +237,74 @@ function createServer(env: any) {
   );
 
   server.tool(
+    "create_google_drive_folder",
+    "Create a Google Drive folder or nested folder path. Accepts a full path beginning with My Drive/. Reuses folders that already exist and creates only missing segments. Never deletes or moves anything.",
+    {
+      folder_path: z.string().min(1).describe("Full Google Drive folder path, for example My Drive/01-Projects/Project Name/New Folder"),
+    },
+    async ({ folder_path }) => {
+      try {
+        const parts = folder_path
+          .split("/")
+          .map((part) => part.trim())
+          .filter(Boolean)
+          .filter((part, index) => !(index === 0 && part.toLowerCase() === "my drive"));
+
+        if (!parts.length) return textResult("No folder name was provided. No changes were made.", true);
+
+        let parentId = "root";
+        const created: string[] = [];
+        const reused: string[] = [];
+
+        for (const part of parts) {
+          const escapedName = part.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+          const query = `'${parentId}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+          const result = await googleFetch(
+            env,
+            `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,parents)&pageSize=10`,
+          );
+          const matches = result.files ?? [];
+
+          if (matches.length > 1) {
+            return textResult(`Multiple folders named "${part}" exist under the same parent. No new folder was created at this level.`, true);
+          }
+
+          if (matches.length === 1) {
+            parentId = matches[0].id;
+            reused.push(part);
+            continue;
+          }
+
+          const folder = await googleFetch(
+            env,
+            "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink,parents",
+            {
+              method: "POST",
+              body: JSON.stringify({
+                name: part,
+                mimeType: "application/vnd.google-apps.folder",
+                parents: [parentId],
+              }),
+            },
+          );
+          parentId = folder.id;
+          created.push(part);
+        }
+
+        return textResult([
+          `Google Drive folder path ready: ${folder_path}`,
+          `Folder ID: ${parentId}`,
+          `URL: https://drive.google.com/drive/folders/${parentId}`,
+          `Created: ${created.length ? created.join(" / ") : "none"}`,
+          `Reused existing: ${reused.length ? reused.join(" / ") : "none"}`,
+        ].join("\n"));
+      } catch (error: any) {
+        return textResult(error?.message ?? String(error), true);
+      }
+    },
+  );
+
+  server.tool(
     "create_google_doc",
     "Create a Google Doc with supplied text inside a Google Drive folder. Accepts either a folder ID or a full folder path such as My Drive/01-Projects/Project Name/Subfolder, and resolves the path automatically. Never deletes anything.",
     {
@@ -247,7 +315,11 @@ function createServer(env: any) {
     },
     async ({ title, content, folder_id, folder_path }) => {
       try {
-        const destinationFolderId = folder_id ?? (folder_path ? await resolveGoogleDriveFolderPath(env, folder_path) : undefined);
+        const suppliedFolder = folder_path ?? folder_id;
+        const looksLikePath = suppliedFolder?.includes("/") || suppliedFolder?.toLowerCase().startsWith("my drive");
+        const destinationFolderId = suppliedFolder
+          ? (looksLikePath ? await resolveGoogleDriveFolderPath(env, suppliedFolder) : suppliedFolder)
+          : undefined;
         const metadata: any = { name: title, mimeType: "application/vnd.google-apps.document" };
         if (destinationFolderId) metadata.parents = [destinationFolderId];
         const file = await googleFetch(env, "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink,parents", {
