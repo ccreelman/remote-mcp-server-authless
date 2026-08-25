@@ -70,6 +70,31 @@ async function googleFetch(env: any, url: string, init: RequestInit = {}): Promi
   return data;
 }
 
+async function resolveGoogleDriveFolderPath(env: any, folderPath: string): Promise<string> {
+  const parts = folderPath
+    .split("/")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part, index) => !(index === 0 && part.toLowerCase() === "my drive"));
+
+  if (!parts.length) return "root";
+
+  let parentId = "root";
+  for (const part of parts) {
+    const escapedName = part.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    const query = `'${parentId}' in parents and name = '${escapedName}' and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+    const result = await googleFetch(
+      env,
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,parents)&pageSize=10`,
+    );
+    const matches = result.files ?? [];
+    if (matches.length === 0) throw new Error(`Google Drive folder not found while resolving path: ${part}`);
+    if (matches.length > 1) throw new Error(`Multiple Google Drive folders named "${part}" exist under the same parent. No document was created.`);
+    parentId = matches[0].id;
+  }
+  return parentId;
+}
+
 function createServer(env: any) {
   const server = new McpServer({ name: "SentinelBrain", version: "2.0.0" });
 
@@ -213,16 +238,18 @@ function createServer(env: any) {
 
   server.tool(
     "create_google_doc",
-    "Create a Google Doc with supplied text, optionally inside a specified Google Drive folder. Never deletes anything.",
+    "Create a Google Doc with supplied text inside a Google Drive folder. Accepts either a folder ID or a full folder path such as My Drive/01-Projects/Project Name/Subfolder, and resolves the path automatically. Never deletes anything.",
     {
       title: z.string().min(1).describe("Document title"),
       content: z.string().describe("Plain-text document content"),
       folder_id: z.string().optional().describe("Optional destination Google Drive folder ID"),
+      folder_path: z.string().optional().describe("Optional full Google Drive folder path, for example My Drive/01-Projects/Project Name/Subfolder"),
     },
-    async ({ title, content, folder_id }) => {
+    async ({ title, content, folder_id, folder_path }) => {
       try {
+        const destinationFolderId = folder_id ?? (folder_path ? await resolveGoogleDriveFolderPath(env, folder_path) : undefined);
         const metadata: any = { name: title, mimeType: "application/vnd.google-apps.document" };
-        if (folder_id) metadata.parents = [folder_id];
+        if (destinationFolderId) metadata.parents = [destinationFolderId];
         const file = await googleFetch(env, "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink,parents", {
           method: "POST",
           body: JSON.stringify(metadata),
