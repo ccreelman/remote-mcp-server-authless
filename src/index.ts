@@ -2,14 +2,6 @@ import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-const GOOGLE_REDIRECT_URI =
-  "https://remote-mcp-server-authless.candice-9e9.workers.dev/google/callback";
-
-const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/documents",
-  "https://www.googleapis.com/auth/drive",
-].join(" ");
-
 function textResult(text: string, isError = false) {
   return {
     content: [{ type: "text" as const, text }],
@@ -108,9 +100,7 @@ async function resolveGoogleDriveFolderPath(
   let parentId = "root";
 
   for (const part of parts) {
-    const escapedName = part
-      .replace(/\\/g, "\\\\")
-      .replace(/'/g, "\\'");
+    const escapedName = part.split("'").join("\\'");
 
     const query =
       `'${parentId}' in parents and ` +
@@ -148,12 +138,12 @@ async function resolveGoogleDriveFolderPath(
 function createServer(env: any) {
   const server = new McpServer({
     name: "SentinelBrain",
-    version: "2.2.1",
+    version: "3.0.0",
   });
 
   server.tool(
     "search_archive",
-    "Search the indexed archive using natural language. Optionally restrict results to a specific Google Drive folder path.",
+    "Search the indexed archive using natural language. Optionally restrict results to a Google Drive folder path.",
     {
       query: z.string(),
       limit: z.number().int().min(1).max(20).optional(),
@@ -217,7 +207,7 @@ function createServer(env: any) {
           };
         }
 
-        const response = await fetch(
+        const qdrantResponse = await fetch(
           `${env.QDRANT_URL}/collections/Voyage%20Archive/points/search`,
           {
             method: "POST",
@@ -229,15 +219,15 @@ function createServer(env: any) {
           },
         );
 
-        if (!response.ok) {
+        if (!qdrantResponse.ok) {
           return textResult(
-            `Qdrant search failed (${response.status}): ${await response.text()}`,
+            `Qdrant search failed (${qdrantResponse.status}): ${await qdrantResponse.text()}`,
             true,
           );
         }
 
-        const data: any = await response.json();
-        const results = data.result ?? [];
+        const qdrantData: any = await qdrantResponse.json();
+        const results = qdrantData.result ?? [];
 
         if (results.length === 0) {
           return textResult(
@@ -407,19 +397,26 @@ function createServer(env: any) {
         const data: any = await response.json();
         const points = data.result?.points ?? [];
 
-        points.sort(
-          (a: any, b: any) =>
-            (a.payload?.chunk_number ?? 0) -
-            (b.payload?.chunk_number ?? 0),
-        );
-
         if (points.length === 0) {
           return textResult(
             `No chunks found for ${filename} in range ${minChunk}-${maxChunk}`,
           );
         }
 
+        points.sort(
+          (a: any, b: any) =>
+            (a.payload?.chunk_number ?? 0) -
+            (b.payload?.chunk_number ?? 0),
+        );
+
         const lineBreak = String.fromCharCode(10);
+        const divider =
+          lineBreak +
+          lineBreak +
+          "---" +
+          lineBreak +
+          lineBreak;
+
         const body = points
           .map((point: any) => {
             return (
@@ -428,13 +425,7 @@ function createServer(env: any) {
               (point.payload?.text ?? "")
             );
           })
-          .join(
-            lineBreak +
-              lineBreak +
-              "---" +
-              lineBreak +
-              lineBreak,
-          );
+          .join(divider);
 
         return textResult(
           `File: ${filename} (${totalChunks} total chunks)` +
@@ -657,6 +648,8 @@ function createServer(env: any) {
           );
         }
 
+        const lineBreak = String.fromCharCode(10);
+
         return textResult(
           [
             `Created Google Doc: ${file.name}`,
@@ -665,7 +658,7 @@ function createServer(env: any) {
               file.webViewLink ??
               `https://docs.google.com/document/d/${file.id}/edit`
             }`,
-          ].join(String.fromCharCode(10)),
+          ].join(lineBreak),
         );
       } catch (error: any) {
         return textResult(error?.message ?? String(error), true);
@@ -742,6 +735,8 @@ function createServer(env: any) {
           },
         );
 
+        const lineBreak = String.fromCharCode(10);
+
         if (mode === "replace_text") {
           const changed =
             result.replies?.[0]?.replaceAllText?.occurrencesChanged ?? 0;
@@ -756,14 +751,14 @@ function createServer(env: any) {
           return textResult(
             "Updated Google Doc. Exact passage replacements: " +
               changed +
-              String.fromCharCode(10) +
+              lineBreak +
               `URL: https://docs.google.com/document/d/${document_id}/edit`,
           );
         }
 
         return textResult(
           "Appended text to Google Doc." +
-            String.fromCharCode(10) +
+            lineBreak +
             `URL: https://docs.google.com/document/d/${document_id}/edit`,
         );
       } catch (error: any) {
@@ -775,140 +770,12 @@ function createServer(env: any) {
   return server;
 }
 
-async function handleGoogleAuth(
-  request: Request,
-  env: any,
-): Promise<Response> {
-  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) {
-    return new Response(
-      "Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET.",
-      { status: 500 },
-    );
-  }
-
-  const authUrl = new URL(
-    "https://accounts.google.com/o/oauth2/v2/auth",
-  );
-
-  authUrl.search = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: GOOGLE_REDIRECT_URI,
-    response_type: "code",
-    scope: GOOGLE_SCOPES,
-    access_type: "offline",
-    prompt: "consent",
-  }).toString();
-
-  return Response.redirect(authUrl.toString(), 302);
-}
-
-async function handleGoogleCallback(
-  request: Request,
-  env: any,
-): Promise<Response> {
-  const url = new URL(request.url);
-  const error = url.searchParams.get("error");
-  const code = url.searchParams.get("code");
-
-  if (error) {
-    return new Response(
-      `Google authorization failed: ${error}`,
-      { status: 400 },
-    );
-  }
-
-  if (!code) {
-    return new Response(
-      "Missing Google authorization code.",
-      { status: 400 },
-    );
-  }
-
-  const tokenResponse = await fetch(
-    "https://oauth2.googleapis.com/token",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        code,
-        client_id: env.GOOGLE_CLIENT_ID,
-        client_secret: env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: GOOGLE_REDIRECT_URI,
-        grant_type: "authorization_code",
-      }),
-    },
-  );
-
-  const tokenData: any = await tokenResponse.json();
-
-  if (!tokenResponse.ok || !tokenData.refresh_token) {
-    return new Response(
-      `Google token exchange failed (${tokenResponse.status}): ${JSON.stringify(
-        tokenData,
-      )}`,
-      { status: 500 },
-    );
-  }
-
-  const safeToken = String(tokenData.refresh_token)
-    .replace(/&/g, "&")
-    .replace(/</g, "<")
-    .replace(/>/g, ">")
-    .replace(/"/g, """);
-
-  const html = `
-<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Google authorization complete</title>
-</head>
-<body style="font-family:system-ui;max-width:760px;margin:60px auto;padding:24px">
-  <h1>Google authorization complete</h1>
-  <p>Copy this value into Cloudflare as GOOGLE_REFRESH_TOKEN:</p>
-  <textarea id="token" style="width:100%;height:120px">${safeToken}</textarea>
-  <br><br>
-  <button id="copy">Copy refresh token</button>
-  <p id="status"></p>
-  <script>
-    document.getElementById("copy").onclick = async () => {
-      await navigator.clipboard.writeText(
-        document.getElementById("token").value
-      );
-      document.getElementById("status").textContent =
-        "Copied. Add it to Cloudflare as GOOGLE_REFRESH_TOKEN.";
-    };
-  </script>
-</body>
-</html>
-`;
-
-  return new Response(html, {
-    headers: {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-    },
-  });
-}
-
 export default {
   async fetch(
     request: Request,
     env: any,
     ctx: ExecutionContext,
   ): Promise<Response> {
-    const url = new URL(request.url);
-
-    if (url.pathname === "/google/auth") {
-      return handleGoogleAuth(request, env);
-    }
-
-    if (url.pathname === "/google/callback") {
-      return handleGoogleCallback(request, env);
-    }
-
     const server = createServer(env);
 
     const handler = createMcpHandler(server, {
