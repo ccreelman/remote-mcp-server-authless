@@ -2,13 +2,7 @@ import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
-const VOYAGE_API_KEY = "pa-DU_GwBAxUdpL2Zdcq3IPMSt4I58V92WI67B2rNWoeh9";
-const QDRANT_URL =
-  "https://e2feb2a4-32fa-4be0-a5cb-1e2c3e441c22.us-west-1-0.aws.cloud.qdrant.io";
-const QDRANT_API_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZjQ3MzU4YTktOWQzNC00YWNmLTg5MjktMGJiMGU0OGQ2NWNlIn0.4nBsvVkZwMp0mF5eCX7ZcUmP_S6le-omQulR8VcAfL4";
-
-const REDIRECT_URI =
+const GOOGLE_REDIRECT_URI =
   "https://remote-mcp-server-authless.candice-9e9.workers.dev/google/callback";
 
 const GOOGLE_SCOPES = [
@@ -21,38 +15,6 @@ function textResult(text: string, isError = false) {
     content: [{ type: "text" as const, text }],
     ...(isError ? { isError: true } : {}),
   };
-}
-
-async function hmacHex(secret: string, value: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-
-  const signature = await crypto.subtle.sign(
-    "HMAC",
-    key,
-    new TextEncoder().encode(value),
-  );
-
-  return Array.from(new Uint8Array(signature))
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function timingSafeEqual(a: string, b: string): Promise<boolean> {
-  if (a.length !== b.length) return false;
-
-  let result = 0;
-
-  for (let index = 0; index < a.length; index++) {
-    result |= a.charCodeAt(index) ^ b.charCodeAt(index);
-  }
-
-  return result === 0;
 }
 
 async function getGoogleAccessToken(env: any): Promise<string> {
@@ -139,7 +101,9 @@ async function resolveGoogleDriveFolderPath(
         !(index === 0 && part.toLowerCase() === "my drive"),
     );
 
-  if (!parts.length) return "root";
+  if (parts.length === 0) {
+    return "root";
+  }
 
   let parentId = "root";
 
@@ -149,12 +113,16 @@ async function resolveGoogleDriveFolderPath(
       .replace(/'/g, "\\'");
 
     const query =
-      `'${parentId}' in parents and name = '${escapedName}' and ` +
-      "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+      `'${parentId}' in parents and ` +
+      `name = '${escapedName}' and ` +
+      "mimeType = 'application/vnd.google-apps.folder' and " +
+      "trashed = false";
 
     const result = await googleFetch(
       env,
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,parents)&pageSize=10`,
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+        query,
+      )}&fields=files(id,name,parents)&pageSize=10`,
     );
 
     const matches = result.files ?? [];
@@ -180,7 +148,7 @@ async function resolveGoogleDriveFolderPath(
 function createServer(env: any) {
   const server = new McpServer({
     name: "SentinelBrain",
-    version: "2.1.0",
+    version: "2.2.0",
   });
 
   server.tool(
@@ -193,7 +161,7 @@ function createServer(env: any) {
         .string()
         .optional()
         .describe(
-          "Optional folder path or partial folder path. Only matching archive folders will be searched.",
+          "Optional Google Drive folder path. Results are restricted to archive records whose folder path contains this text.",
         ),
     },
     async ({ query, limit, folder_path }) => {
@@ -205,7 +173,7 @@ function createServer(env: any) {
           {
             method: "POST",
             headers: {
-              Authorization: `Bearer ${VOYAGE_API_KEY}`,
+              Authorization: `Bearer ${env.VOYAGE_API_KEY}`,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -240,13 +208,13 @@ function createServer(env: any) {
           with_vector: false,
         };
 
-        if (folder_path) {
+        if (folder_path && folder_path.trim()) {
           searchBody.filter = {
             must: [
               {
                 key: "folder_path",
                 match: {
-                  text: folder_path,
+                  text: folder_path.trim(),
                 },
               },
             ],
@@ -254,11 +222,11 @@ function createServer(env: any) {
         }
 
         const qdrantResponse = await fetch(
-          `${QDRANT_URL}/collections/Voyage%20Archive/points/search`,
+          `${env.QDRANT_URL}/collections/Voyage%20Archive/points/search`,
           {
             method: "POST",
             headers: {
-              "api-key": QDRANT_API_KEY,
+              "api-key": env.QDRANT_API_KEY,
               "Content-Type": "application/json",
             },
             body: JSON.stringify(searchBody),
@@ -275,7 +243,7 @@ function createServer(env: any) {
         const qdrantData: any = await qdrantResponse.json();
         const results = qdrantData.result ?? [];
 
-        if (!results.length) {
+        if (results.length === 0) {
           const scope = folder_path
             ? ` in folder "${folder_path}"`
             : "";
@@ -284,6 +252,14 @@ function createServer(env: any) {
             `No archive passages found for: ${query}${scope}`,
           );
         }
+
+        const lineBreak = String.fromCharCode(10);
+        const divider =
+          lineBreak +
+          lineBreak +
+          "---" +
+          lineBreak +
+          lineBreak;
 
         const output = results
           .map((result: any, index: number) => {
@@ -301,10 +277,9 @@ function createServer(env: any) {
               `Relevance: ${score}`,
               "",
               payload.text ?? "",
-            ].join("\n");
+            ].join(lineBreak);
           })
-          .join("\n\n--- 
-\n");
+          .join(divider);
 
         return textResult(output);
       } catch (error: any) {
@@ -323,16 +298,22 @@ function createServer(env: any) {
       from_chunk: z.number().int().min(1).optional(),
       to_chunk: z.number().int().min(1).optional(),
     },
-    async ({ filename, position, count, from_chunk, to_chunk }) => {
+    async ({
+      filename,
+      position,
+      count,
+      from_chunk,
+      to_chunk,
+    }) => {
       try {
         const chunkCount = count ?? 5;
 
         const infoResponse = await fetch(
-          `${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
+          `${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
           {
             method: "POST",
             headers: {
-              "api-key": QDRANT_API_KEY,
+              "api-key": env.QDRANT_API_KEY,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -361,7 +342,7 @@ function createServer(env: any) {
         const infoData: any = await infoResponse.json();
         const infoPoints = infoData.result?.points ?? [];
 
-        if (!infoPoints.length) {
+        if (infoPoints.length === 0) {
           return textResult(
             `No file found in archive with name: ${filename}`,
           );
@@ -374,7 +355,10 @@ function createServer(env: any) {
         let maxChunk = totalChunks;
 
         if (position === "last") {
-          minChunk = Math.max(1, totalChunks - chunkCount + 1);
+          minChunk = Math.max(
+            1,
+            totalChunks - chunkCount + 1,
+          );
         }
 
         if (position === "first") {
@@ -390,11 +374,11 @@ function createServer(env: any) {
         }
 
         const fetchResponse = await fetch(
-          `${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
+          `${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
           {
             method: "POST",
             headers: {
-              "api-key": QDRANT_API_KEY,
+              "api-key": env.QDRANT_API_KEY,
               "Content-Type": "application/json",
             },
             body: JSON.stringify({
@@ -430,7 +414,7 @@ function createServer(env: any) {
         const fetchData: any = await fetchResponse.json();
         const points = fetchData.result?.points ?? [];
 
-        if (!points.length) {
+        if (points.length === 0) {
           return textResult(
             `No chunks found for ${filename} in range ${minChunk}-${maxChunk}`,
           );
@@ -442,16 +426,31 @@ function createServer(env: any) {
             (b.payload?.chunk_number ?? 0),
         );
 
+        const lineBreak = String.fromCharCode(10);
+        const divider =
+          lineBreak +
+          lineBreak +
+          "---" +
+          lineBreak +
+          lineBreak;
+
         const body = points
-          .map(
-            (point: any) =>
-              `[Chunk ${point.payload?.chunk_number}/${totalChunks}]\n${point.payload?.text ?? ""}`,
-          )
-          .join("\n\n--- 
-\n");
+          .map((point: any) => {
+            return (
+              `[Chunk ${point.payload?.chunk_number ?? "?"}/${totalChunks}]` +
+              lineBreak +
+              (point.payload?.text ?? "")
+            );
+          })
+          .join(divider);
 
         return textResult(
-          `File: ${filename} (${totalChunks} total chunks)\nShowing chunks ${minChunk}-${maxChunk}:\n\n${body}`,
+          `File: ${filename} (${totalChunks} total chunks)` +
+            lineBreak +
+            `Showing chunks ${minChunk}-${maxChunk}:` +
+            lineBreak +
+            lineBreak +
+            body,
         );
       } catch (error: any) {
         return textResult(error?.message ?? String(error), true);
@@ -500,11 +499,11 @@ function createServer(env: any) {
           }
 
           const response = await fetch(
-            `${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
+            `${env.QDRANT_URL}/collections/Voyage%20Archive/points/scroll`,
             {
               method: "POST",
               headers: {
-                "api-key": QDRANT_API_KEY,
+                "api-key": env.QDRANT_API_KEY,
                 "Content-Type": "application/json",
               },
               body: JSON.stringify(scrollBody),
@@ -537,12 +536,12 @@ function createServer(env: any) {
 
           offset = data.result?.next_page_offset ?? null;
 
-          if (!offset || !points.length) {
+          if (!offset || points.length === 0) {
             break;
           }
         }
 
-        if (!allFiles.size) {
+        if (allFiles.size === 0) {
           return textResult(
             `No files found in archive matching folder path: ${folder_path}`,
           );
@@ -566,22 +565,26 @@ function createServer(env: any) {
           });
         }
 
+        const lineBreak = String.fromCharCode(10);
         let output =
-          `ARCHIVE FILES matching "${folder_path}" 
-` +
-          `Total unique files: ${allFiles.size}\n` +
-          `Total folders: ${folders.size}\n\n`;
+          `ARCHIVE FILES matching "${folder_path}"` +
+          lineBreak +
+          `Total unique files: ${allFiles.size}` +
+          lineBreak +
+          `Total folders: ${folders.size}` +
+          lineBreak +
+          lineBreak;
 
         for (const folder of [...folders.keys()].sort()) {
-          output += `FOLDER: ${folder}\n`;
+          output += `FOLDER: ${folder}${lineBreak}`;
 
           for (const file of folders
             .get(folder)!
             .sort((a, b) => a.name.localeCompare(b.name))) {
-            output += ` ${file.name} (${file.chunks} chunks)\n`;
+            output += `  ${file.name} (${file.chunks} chunks)${lineBreak}`;
           }
 
-          output += "\n";
+          output += lineBreak;
         }
 
         return textResult(output);
@@ -592,133 +595,32 @@ function createServer(env: any) {
   );
 
   server.tool(
-    "create_google_drive_folder",
-    "Create a Google Drive folder or nested folder path. Reuses existing folders and creates only missing segments.",
+    "create_google_doc",
+    "Create a Google Doc with supplied text, optionally inside a Google Drive folder path or folder ID.",
     {
+      title: z.string().min(1).describe("Document title"),
+      content: z.string().describe("Plain-text document content"),
       folder_path: z
         .string()
-        .min(1)
+        .optional()
         .describe("Full Google Drive folder path"),
-    },
-    async ({ folder_path }) => {
-      try {
-        const parts = folder_path
-          .split("/")
-          .map((part) => part.trim())
-          .filter(Boolean)
-          .filter(
-            (part, index) =>
-              !(index === 0 && part.toLowerCase() === "my drive"),
-          );
-
-        if (!parts.length) {
-          return textResult(
-            "No folder name was provided. No changes were made.",
-            true,
-          );
-        }
-
-        let parentId = "root";
-        const created: string[] = [];
-        const reused: string[] = [];
-
-        for (const part of parts) {
-          const escapedName = part
-            .replace(/\\/g, "\\\\")
-            .replace(/'/g, "\\'");
-
-          const query =
-            `'${parentId}' in parents and name = '${escapedName}' and ` +
-            "mimeType = 'application/vnd.google-apps.folder' and trashed = false";
-
-          const result = await googleFetch(
-            env,
-            `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&fields=files(id,name,parents)&pageSize=10`,
-          );
-
-          const matches = result.files ?? [];
-
-          if (matches.length > 1) {
-            return textResult(
-              `Multiple folders named "${part}" exist under the same parent. No new folder was created at this level.`,
-              true,
-            );
-          }
-
-          if (matches.length === 1) {
-            parentId = matches[0].id;
-            reused.push(part);
-            continue;
-          }
-
-          const folder = await googleFetch(
-            env,
-            "https://www.googleapis.com/drive/v3/files?fields=id,name,webViewLink,parents",
-            {
-              method: "POST",
-              body: JSON.stringify({
-                name: part,
-                mimeType: "application/vnd.google-apps.folder",
-                parents: [parentId],
-              }),
-            },
-          );
-
-          parentId = folder.id;
-          created.push(part);
-        }
-
-        return textResult(
-          [
-            `Google Drive folder path ready: ${folder_path}`,
-            `Folder ID: ${parentId}`,
-            `URL: https://drive.google.com/drive/folders/${parentId}`,
-            `Created: ${created.length ? created.join(" / ") : "none"}`,
-            `Reused existing: ${reused.length ? reused.join(" / ") : "none"}`,
-          ].join("\n"),
-        );
-      } catch (error: any) {
-        return textResult(error?.message ?? String(error), true);
-      }
-    },
-  );
-
-  server.tool(
-    "create_google_doc",
-    "Create a Google Doc inside a Google Drive folder using a folder path or folder ID.",
-    {
-      title: z
-        .string()
-        .min(1)
-        .describe("Document title"),
-      content: z
-        .string()
-        .describe("Plain-text document content"),
       folder_id: z
         .string()
         .optional()
-        .describe("Optional folder ID"),
-      folder_path: z
-        .string()
-        .optional()
-        .describe("Optional folder path"),
+        .describe("Google Drive folder ID"),
     },
-    async ({ title, content, folder_id, folder_path }) => {
+    async ({ title, content, folder_path, folder_id }) => {
       try {
-        const suppliedFolder = folder_path ?? folder_id;
+        let destinationFolderId: string | undefined;
 
-        const looksLikePath =
-          suppliedFolder?.includes("/") ||
-          suppliedFolder?.toLowerCase().startsWith("my drive");
-
-        const destinationFolderId = suppliedFolder
-          ? looksLikePath
-            ? await resolveGoogleDriveFolderPath(
-                env,
-                suppliedFolder,
-              )
-            : suppliedFolder
-          : undefined;
+        if (folder_path) {
+          destinationFolderId = await resolveGoogleDriveFolderPath(
+            env,
+            folder_path,
+          );
+        } else if (folder_id) {
+          destinationFolderId = folder_id;
+        }
 
         const metadata: any = {
           name: title,
@@ -741,7 +643,9 @@ function createServer(env: any) {
         if (content) {
           await googleFetch(
             env,
-            `https://docs.googleapis.com/v1/documents/${encodeURIComponent(file.id)}:batchUpdate`,
+            `https://docs.googleapis.com/v1/documents/${encodeURIComponent(
+              file.id,
+            )}:batchUpdate`,
             {
               method: "POST",
               body: JSON.stringify({
@@ -762,8 +666,11 @@ function createServer(env: any) {
           [
             `Created Google Doc: ${file.name}`,
             `Document ID: ${file.id}`,
-            `URL: ${file.webViewLink ?? `https://docs.google.com/document/d/${file.id}/edit`}`,
-          ].join("\n"),
+            `URL: ${
+              file.webViewLink ??
+              `https://docs.google.com/document/d/${file.id}/edit`
+            }`,
+          ].join(String.fromCharCode(10)),
         );
       } catch (error: any) {
         return textResult(error?.message ?? String(error), true);
@@ -775,15 +682,10 @@ function createServer(env: any) {
     "edit_google_doc",
     "Edit an existing Google Doc by appending text or replacing an exact passage.",
     {
-      document_id: z
-        .string()
-        .min(1)
-        .describe("Google Doc ID"),
+      document_id: z.string().min(1).describe("Google Doc ID"),
       mode: z.enum(["append", "replace_text"]),
       text: z.string(),
-      find_text: z
-        .string()
-        .optional(),
+      find_text: z.string().optional(),
     },
     async ({ document_id, mode, text, find_text }) => {
       try {
@@ -792,7 +694,9 @@ function createServer(env: any) {
         if (mode === "append") {
           const doc = await googleFetch(
             env,
-            `https://docs.googleapis.com/v1/documents/${encodeURIComponent(document_id)}`,
+            `https://docs.googleapis.com/v1/documents/${encodeURIComponent(
+              document_id,
+            )}`,
           );
 
           const content = doc.body?.content ?? [];
@@ -834,7 +738,9 @@ function createServer(env: any) {
 
         const result = await googleFetch(
           env,
-          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(document_id)}:batchUpdate`,
+          `https://docs.googleapis.com/v1/documents/${encodeURIComponent(
+            document_id,
+          )}:batchUpdate`,
           {
             method: "POST",
             body: JSON.stringify({ requests }),
@@ -853,12 +759,16 @@ function createServer(env: any) {
           }
 
           return textResult(
-            `Updated Google Doc. Exact passage replacements: ${changed}\nURL: https://docs.google.com/document/d/${document_id}/edit`,
+            `Updated Google Doc. Exact passage replacements: ${changed}` +
+              String.fromCharCode(10) +
+              `URL: https://docs.google.com/document/d/${document_id}/edit`,
           );
         }
 
         return textResult(
-          `Appended text to Google Doc.\nURL: https://docs.google.com/document/d/${document_id}/edit`,
+          "Appended text to Google Doc." +
+            String.fromCharCode(10) +
+            `URL: https://docs.google.com/document/d/${document_id}/edit`,
         );
       } catch (error: any) {
         return textResult(error?.message ?? String(error), true);
@@ -880,24 +790,17 @@ async function handleGoogleAuth(
     );
   }
 
-  const timestamp = Date.now().toString();
-  const signature = await hmacHex(
-    env.GOOGLE_CLIENT_SECRET,
-    timestamp,
-  );
-
   const authUrl = new URL(
     "https://accounts.google.com/o/oauth2/v2/auth",
   );
 
   authUrl.search = new URLSearchParams({
     client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: REDIRECT_URI,
+    redirect_uri: GOOGLE_REDIRECT_URI,
     response_type: "code",
     scope: GOOGLE_SCOPES,
     access_type: "offline",
     prompt: "consent",
-    state: `${timestamp}.${signature}`,
   }).toString();
 
   return Response.redirect(authUrl.toString(), 302);
@@ -909,6 +812,7 @@ async function handleGoogleCallback(
 ): Promise<Response> {
   const url = new URL(request.url);
   const error = url.searchParams.get("error");
+  const code = url.searchParams.get("code");
 
   if (error) {
     return new Response(
@@ -917,32 +821,9 @@ async function handleGoogleCallback(
     );
   }
 
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state") ?? "";
-  const [timestamp, signature] = state.split(".");
-
-  if (!code || !timestamp || !signature) {
+  if (!code) {
     return new Response(
-      "Missing authorization code or security state.",
-      { status: 400 },
-    );
-  }
-
-  const expected = await hmacHex(
-    env.GOOGLE_CLIENT_SECRET,
-    timestamp,
-  );
-
-  const age = Date.now() - Number(timestamp);
-
-  if (
-    !(await timingSafeEqual(signature, expected)) ||
-    !Number.isFinite(age) ||
-    age < 0 ||
-    age > 15 * 60 * 1000
-  ) {
-    return new Response(
-      "Authorization state is invalid or expired. Start again at /google/auth.",
+      "Missing Google authorization code.",
       { status: 400 },
     );
   }
@@ -958,7 +839,7 @@ async function handleGoogleCallback(
         code,
         client_id: env.GOOGLE_CLIENT_ID,
         client_secret: env.GOOGLE_CLIENT_SECRET,
-        redirect_uri: REDIRECT_URI,
+        redirect_uri: GOOGLE_REDIRECT_URI,
         grant_type: "authorization_code",
       }),
     },
@@ -968,7 +849,9 @@ async function handleGoogleCallback(
 
   if (!tokenResponse.ok || !tokenData.refresh_token) {
     return new Response(
-      `Google token exchange failed (${tokenResponse.status}): ${JSON.stringify(tokenData)}`,
+      `Google token exchange failed (${tokenResponse.status}): ${JSON.stringify(
+        tokenData,
+      )}`,
       { status: 500 },
     );
   }
@@ -979,40 +862,39 @@ async function handleGoogleCallback(
     .replace(/>/g, ">")
     .replace(/"/g, """);
 
-  return new Response(
-    `<!doctype html>
+  const html = `
+<!doctype html>
 <html>
 <head>
-<meta charset="utf-8">
-<title>Google authorization complete</title>
-<style>
-body{font-family:system-ui;background:#111;color:#eee;max-width:760px;margin:60px auto;padding:24px}
-button{font-size:18px;padding:12px 18px;cursor:pointer}
-#status{margin-top:16px;color:#8f8}
-textarea{width:100%;height:120px;margin-top:16px}
-</style>
+  <meta charset="utf-8">
+  <title>Google authorization complete</title>
 </head>
-<body>
-<h1>Google authorization complete</h1>
-<p>Copy this value into the Cloudflare secret named GOOGLE_REFRESH_TOKEN.</p>
-<textarea id="token" readonly>${safeToken}</textarea>
-<br>
-<button id="copy">Copy token</button>
-<div id="status"></div>
-<script>
-document.getElementById("copy").onclick = async () => {
-  await navigator.clipboard.writeText(document.getElementById("token").value);
-  document.getElementById("status").textContent = "Copied.";
-};
-</script>
+<body style="font-family:system-ui;max-width:760px;margin:60px auto;padding:24px">
+  <h1>Google authorization complete</h1>
+  <p>Copy this value into Cloudflare as GOOGLE_REFRESH_TOKEN:</p>
+  <textarea id="token" style="width:100%;height:120px">${safeToken}</textarea>
+  <br><br>
+  <button id="copy">Copy refresh token</button>
+  <p id="status"></p>
+  <script>
+    document.getElementById("copy").onclick = async () => {
+      await navigator.clipboard.writeText(
+        document.getElementById("token").value
+      );
+      document.getElementById("status").textContent =
+        "Copied. Add it to Cloudflare as GOOGLE_REFRESH_TOKEN.";
+    };
+  </script>
 </body>
-</html>`,
-    {
-      headers: {
-        "Content-Type": "text/html; charset=UTF-8",
-      },
+</html>
+`;
+
+  return new Response(html, {
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
     },
-  );
+  });
 }
 
 export default {
@@ -1020,7 +902,7 @@ export default {
     request: Request,
     env: any,
     ctx: ExecutionContext,
-  ) {
+  ): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/google/auth") {
