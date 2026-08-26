@@ -581,7 +581,9 @@ function createServer(env: any) {
           for (const file of folders
             .get(folder)!
             .sort((a, b) => a.name.localeCompare(b.name))) {
-            output += `  ${file.name} (${file.chunks} chunks)${lineBreak}`;
+            output +=
+              `  ${file.name} (${file.chunks} chunks)` +
+              lineBreak;
           }
 
           output += lineBreak;
@@ -614,10 +616,11 @@ function createServer(env: any) {
         let destinationFolderId: string | undefined;
 
         if (folder_path) {
-          destinationFolderId = await resolveGoogleDriveFolderPath(
-            env,
-            folder_path,
-          );
+          destinationFolderId =
+            await resolveGoogleDriveFolderPath(
+              env,
+              folder_path,
+            );
         } else if (folder_id) {
           destinationFolderId = folder_id;
         }
@@ -759,7 +762,8 @@ function createServer(env: any) {
           }
 
           return textResult(
-            `Updated Google Doc. Exact passage replacements: ${changed}` +
+            "Updated Google Doc. Exact passage replacements: " +
+              changed +
               String.fromCharCode(10) +
               `URL: https://docs.google.com/document/d/${document_id}/edit`,
           );
@@ -923,3 +927,11 @@ export default {
     return handler(request, env, ctx);
   },
 };
+
+
+
+
+
+Like
+
+Dislike
