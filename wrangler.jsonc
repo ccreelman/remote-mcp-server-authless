@@ -7,14 +7,18 @@
   "keep_vars": true,
   "migrations": [
     {
-      "tag": "v1",
-      "new_sqlite_classes": ["MyMCP"]
-    },
-    {
-      "tag": "v2",
-      "deleted_classes": ["MyMCP"]
+      "new_sqlite_classes": ["MyMCP"],
+      "tag": "v1"
     }
   ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "class_name": "MyMCP",
+        "name": "MCP_OBJECT"
+      }
+    ]
+  },
   "observability": {
     "enabled": true
   }
