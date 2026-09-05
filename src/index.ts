@@ -1,4 +1,3 @@
-
 import { createMcpHandler } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -235,7 +234,7 @@ async function getGoogleDocMetadata(env: any, docId: string): Promise<{ name: st
 }
 
 function createServer(env: any) {
-  const server = new McpServer({ name: "SentinelBrain", version: "2.1.0" });
+  const server = new McpServer({ name: "SentinelBrain", version: "2.2.0" });
 
   server.tool(
     "search_archive",
@@ -561,6 +560,35 @@ async function handleGoogleCallback(request: Request, env: any): Promise<Respons
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
+async function autoIngestRecentChanges(env: any): Promise<void> {
+  const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+  const driveQuery = "modifiedTime > '" + twoMinutesAgo + "' and mimeType = 'application/vnd.google-apps.document' and trashed = false";
+  let pageToken: string | undefined;
+  do {
+    const url = new URL("https://www.googleapis.com/drive/v3/files");
+    url.searchParams.set("q", driveQuery);
+    url.searchParams.set("fields", "nextPageToken,files(id,name,modifiedTime)");
+    url.searchParams.set("pageSize", "50");
+    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const result = await googleFetch(env, url.toString());
+    const files = result.files ?? [];
+    for (const file of files) {
+      try {
+        const fullText = await readGoogleDocText(env, file.id);
+        if (!fullText.trim()) continue;
+        await deleteDocChunks(file.id);
+        const docMeta = await getGoogleDocMetadata(env, file.id);
+        await ingestIntoQdrant(fullText, {
+          filename: docMeta.name,
+          folder_path: docMeta.folderPath,
+          google_doc_id: file.id,
+        });
+      } catch (_) {}
+    }
+    pageToken = result.nextPageToken;
+  } while (pageToken);
+}
+
 export default {
   async fetch(request: Request, env: any, ctx: ExecutionContext) {
     const url = new URL(request.url);
@@ -569,5 +597,8 @@ export default {
     const server = createServer(env);
     const handler = createMcpHandler(server, { route: "/mcp", enableJsonResponse: true });
     return handler(request, env, ctx);
+  },
+  async scheduled(event: ScheduledEvent, env: any, ctx: ExecutionContext) {
+    ctx.waitUntil(autoIngestRecentChanges(env));
   },
 };
