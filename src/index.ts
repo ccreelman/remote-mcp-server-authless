@@ -608,7 +608,7 @@ async function autoIngestRecentChanges(env: any): Promise<void> {
   const catchUpUrl = new URL("https://www.googleapis.com/drive/v3/files");
   catchUpUrl.searchParams.set("q", catchUpQuery);
   catchUpUrl.searchParams.set("fields", "files(id,name)");
-  catchUpUrl.searchParams.set("pageSize", "100");
+  catchUpUrl.searchParams.set("pageSize", "10");
   catchUpUrl.searchParams.set("orderBy", "modifiedTime desc");
   const catchUpPageToken = env.CATCHUP_PAGE_TOKEN;
   if (catchUpPageToken) catchUpUrl.searchParams.set("pageToken", catchUpPageToken);
@@ -617,7 +617,7 @@ async function autoIngestRecentChanges(env: any): Promise<void> {
     const files = catchUpResult.files ?? [];
     let indexed = 0;
     for (const file of files) {
-      if (indexed >= 50) break;
+      if (indexed >= 3) break;
       try {
         const alreadyIndexed = await isDocInQdrant(file.id);
         if (alreadyIndexed) continue;
