@@ -640,6 +640,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === "/google/auth") return handleGoogleAuth(request, env);
     if (url.pathname === "/google/callback") return handleGoogleCallback(request, env);
+    ctx.waitUntil(autoIngestRecentChanges(env));
     const server = createServer(env);
     const handler = createMcpHandler(server, { route: "/mcp", enableJsonResponse: true });
     return handler(request, env, ctx);
