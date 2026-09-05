@@ -560,13 +560,29 @@ async function handleGoogleCallback(request: Request, env: any): Promise<Respons
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
+async function isDocInQdrant(googleDocId: string): Promise<boolean> {
+  const response = await fetch(`${QDRANT_URL}/collections/Voyage%20Archive/points/scroll`, {
+    method: "POST",
+    headers: { "api-key": QDRANT_API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filter: { must: [{ key: "google_doc_id", match: { value: googleDocId } }] },
+      limit: 1,
+      with_payload: false,
+      with_vector: false,
+    }),
+  });
+  if (!response.ok) return false;
+  const data: any = await response.json();
+  return (data.result?.points?.length ?? 0) > 0;
+}
+
 async function autoIngestRecentChanges(env: any): Promise<void> {
   const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-  const driveQuery = "modifiedTime > '" + twoMinutesAgo + "' and mimeType = 'application/vnd.google-apps.document' and trashed = false";
+  const recentQuery = "modifiedTime > '" + twoMinutesAgo + "' and mimeType = 'application/vnd.google-apps.document' and trashed = false";
   let pageToken: string | undefined;
   do {
     const url = new URL("https://www.googleapis.com/drive/v3/files");
-    url.searchParams.set("q", driveQuery);
+    url.searchParams.set("q", recentQuery);
     url.searchParams.set("fields", "nextPageToken,files(id,name,modifiedTime)");
     url.searchParams.set("pageSize", "50");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -587,6 +603,36 @@ async function autoIngestRecentChanges(env: any): Promise<void> {
     }
     pageToken = result.nextPageToken;
   } while (pageToken);
+
+  const catchUpQuery = "mimeType = 'application/vnd.google-apps.document' and trashed = false";
+  const catchUpUrl = new URL("https://www.googleapis.com/drive/v3/files");
+  catchUpUrl.searchParams.set("q", catchUpQuery);
+  catchUpUrl.searchParams.set("fields", "files(id,name)");
+  catchUpUrl.searchParams.set("pageSize", "10");
+  catchUpUrl.searchParams.set("orderBy", "modifiedTime desc");
+  const catchUpPageToken = env.CATCHUP_PAGE_TOKEN;
+  if (catchUpPageToken) catchUpUrl.searchParams.set("pageToken", catchUpPageToken);
+  try {
+    const catchUpResult = await googleFetch(env, catchUpUrl.toString());
+    const files = catchUpResult.files ?? [];
+    let indexed = 0;
+    for (const file of files) {
+      if (indexed >= 5) break;
+      try {
+        const alreadyIndexed = await isDocInQdrant(file.id);
+        if (alreadyIndexed) continue;
+        const fullText = await readGoogleDocText(env, file.id);
+        if (!fullText.trim()) continue;
+        const docMeta = await getGoogleDocMetadata(env, file.id);
+        await ingestIntoQdrant(fullText, {
+          filename: docMeta.name,
+          folder_path: docMeta.folderPath,
+          google_doc_id: file.id,
+        });
+        indexed++;
+      } catch (_) {}
+    }
+  } catch (_) {}
 }
 
 export default {
