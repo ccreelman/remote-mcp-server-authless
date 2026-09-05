@@ -92,12 +92,6 @@ async function resolveGoogleDriveFolderPath(env: any, folderPath: string): Promi
   return parentId;
 }
 
-/* ============================================================
-   AUTO-INGESTION HELPERS  (v2.1.0)
-   Chunks text, embeds via Voyage, upserts into Qdrant so every
-   created or edited Google Doc is instantly searchable.
-   ============================================================ */
-
 function chunkText(text: string, maxChunkSize = 1500): string[] {
   const paragraphs = text.split(/\n\n+/);
   const chunks: string[] = [];
@@ -239,14 +233,9 @@ async function getGoogleDocMetadata(env: any, docId: string): Promise<{ name: st
   return { name, folderPath };
 }
 
-/* ============================================================
-   MCP SERVER  (v2.1.0 — with auto-ingestion)
-   ============================================================ */
-
 function createServer(env: any) {
   const server = new McpServer({ name: "SentinelBrain", version: "2.1.0" });
 
-  /* ---------- search_archive (unchanged) ---------- */
   server.tool(
     "search_archive",
     "Search Candice's entire indexed archive using natural language and return relevant passages with source details.",
@@ -282,7 +271,6 @@ function createServer(env: any) {
     },
   );
 
-  /* ---------- fetch_file_chunks (unchanged) ---------- */
   server.tool(
     "fetch_file_chunks",
     "Fetch specific chunks from an archived file by position. Requires an exact filename.",
@@ -335,7 +323,6 @@ function createServer(env: any) {
     },
   );
 
-  /* ---------- list_archive_files (unchanged) ---------- */
   server.tool(
     "list_archive_files",
     "List files and folders in the archive for a project path, including chunk counts.",
@@ -386,7 +373,6 @@ function createServer(env: any) {
     },
   );
 
-  /* ---------- create_google_doc (UPDATED: auto-indexes into archive) ---------- */
   server.tool(
     "create_google_doc",
     "Create a Google Doc with supplied text inside a Google Drive folder. Automatically indexes the new document into the search archive so it is instantly searchable.",
@@ -427,9 +413,9 @@ function createServer(env: any) {
             });
             ingestMsg = ingestResult.success
               ? `\nArchive: indexed ${ingestResult.chunks} chunks.`
-              : `\nArchive: indexing failed — ${ingestResult.error}`;
+              : `\nArchive: indexing failed - ${ingestResult.error}`;
           } catch (ingestError: any) {
-            ingestMsg = `\nArchive: indexing failed — ${ingestError?.message ?? String(ingestError)}`;
+            ingestMsg = `\nArchive: indexing failed - ${ingestError?.message ?? String(ingestError)}`;
           }
         }
         return textResult(`Created Google Doc: ${file.name}\nDocument ID: ${file.id}\nURL: ${docUrl}${ingestMsg}`);
@@ -437,7 +423,6 @@ function createServer(env: any) {
     },
   );
 
-  /* ---------- edit_google_doc (UPDATED: re-indexes after every edit) ---------- */
   server.tool(
     "edit_google_doc",
     "Edit an existing Google Doc without deleting the file. Append text or replace an exact passage. Automatically re-indexes the full document in the search archive after every edit.",
@@ -483,16 +468,15 @@ function createServer(env: any) {
           });
           ingestMsg = ingestResult.success
             ? `\nArchive: re-indexed ${ingestResult.chunks} chunks.`
-            : `\nArchive: re-indexing failed — ${ingestResult.error}`;
+            : `\nArchive: re-indexing failed - ${ingestResult.error}`;
         } catch (ingestError: any) {
-          ingestMsg = `\nArchive: re-indexing failed — ${ingestError?.message ?? String(ingestError)}`;
+          ingestMsg = `\nArchive: re-indexing failed - ${ingestError?.message ?? String(ingestError)}`;
         }
         return textResult(`${editMsg}\nURL: https://docs.google.com/document/d/${document_id}/edit${ingestMsg}`);
       } catch (error: any) { return textResult(error?.message ?? String(error), true); }
     },
   );
 
-  /* ---------- ingest_document (NEW: index any existing Google Doc on demand) ---------- */
   server.tool(
     "ingest_document",
     "Read an existing Google Doc and index it into the search archive. Use this for documents that already exist in Google Drive but are not yet searchable in the archive.",
@@ -521,9 +505,9 @@ function createServer(env: any) {
   return server;
 }
 
-/* ============================================================
-   GOOGLE AUTH HANDLERS (unchanged)
-   ============================================================ */
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "\x26amp;").replace(/</g, "\x26lt;").replace(/>/g, "\x26gt;").replace(/"/g, "\x26quot;");
+}
 
 async function handleGoogleAuth(request: Request, env: any): Promise<Response> {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET) return new Response("Missing GOOGLE_CLIENT_ID or GOOGLE_CLIENT_SECRET.", { status: 500 });
@@ -571,14 +555,10 @@ async function handleGoogleCallback(request: Request, env: any): Promise<Respons
   if (!tokenResponse.ok || !tokenData.refresh_token) {
     return new Response(`Google token exchange failed (${tokenResponse.status}): ${JSON.stringify(tokenData)}`, { status: 500 });
   }
-  const safeToken = String(tokenData.refresh_token).replace(/&/g, "&").replace(/</g, "<").replace(/>/g, ">").replace(/"/g, """);
+  const safeToken = escapeHtml(String(tokenData.refresh_token));
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>Google authorization complete</title><style>body{font-family:system-ui;background:#111;color:#eee;max-width:760px;margin:60px auto;padding:24px}button{font-size:18px;padding:12px 18px;cursor:pointer}#status{margin-top:16px;color:#8f8}</style></head><body><h1>Google authorization complete</h1><p>Click once to copy the final Cloudflare secret.</p><button id="copy">Copy GOOGLE_REFRESH_TOKEN</button><div id="status"></div><textarea id="token" style="position:absolute;left:-9999px">${safeToken}</textarea><script>document.getElementById('copy').onclick=async()=>{await navigator.clipboard.writeText(document.getElementById('token').value);document.getElementById('status').textContent='Copied. Add it to Cloudflare as GOOGLE_REFRESH_TOKEN.'}</script></body></html>`;
   return new Response(html, { headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
-
-/* ============================================================
-   WORKER ENTRY POINT (unchanged)
-   ============================================================ */
 
 export default {
   async fetch(request: Request, env: any, ctx: ExecutionContext) {
